@@ -427,6 +427,7 @@ class OFFabric(app_manager.RyuApp):
         self.mac_table = dict()
         self.arp_table = dict()
         self.graph_map = dict()
+        self.graph_ports = dict()
         
 
         self.link_discovery = True
@@ -648,7 +649,7 @@ class OFFabric(app_manager.RyuApp):
         actions = [dp.ofproto_parser.OFPActionOutput(dport)]
         dp.send_packet_out(actions=actions, data=data)
 
-    def install_flow_same(self,dp,sport,dport,dmac,actions = None):
+    def install_flow_dmac(self,dp,sport,dport,dmac,actions = None):
         actions = [dp.ofproto_parser.OFPActionOutput(dport)]
         ofproto = dp.ofproto
         wildcards = ofproto_v1_0.OFPFW_ALL
@@ -681,7 +682,10 @@ class OFFabric(app_manager.RyuApp):
         for link in self.links._map:
             if not link.dpid in self.graph_map:
                 self.graph_map[link.dpid] = dict()
+            if not link.dpid in self.graph_ports:
+                self.graph_ports[link.dpid] = dict()
             self.graph_map[link.dpid][self.links._map[link].dpid] = 1
+            self.graph_ports[link.dpid][self.links._map[link].dpid] = link.port_no
         return True
 
 
@@ -776,12 +780,12 @@ class OFFabric(app_manager.RyuApp):
             #testing, everything thru the contoller
             if p.protocol_name == 'ipv4':
                 if p.dst in self.arp_table:
+                    dmac = self.arp_table[p.dst][2]
+                    sport = msg.in_port
                     if self.arp_table[p.dst][0] == dp.id:
                         print('same sw')
-                        sport = msg.in_port
                         dport = self.arp_table[p.dst][1]
-                        dmac = self.arp_table[p.dst][2]
-                        self.install_flow_same(dp,sport,dport,dmac)
+                        self.install_flow_dmac(dp,sport,dport,dmac)
                         self._drop_packet(msg)
                         #self.controller_send(dp,dport,msg.data)
                         return
@@ -790,7 +794,19 @@ class OFFabric(app_manager.RyuApp):
                     dst_port = self.arp_table[p.dst][1]
                     met, topo = NetGraph.SrcDst_SPF_ECMP(self.graph_map,dp.id,dst_dpid)
                     print(topo)
-                    self.controller_send(dst_dp,dst_port,msg.data)
+                    cntr = len(topo) 
+                    prev_node = dp
+                    while cntr >= 1:
+                        print(topo[cntr])
+                        print(prev_node.id)
+                        print(self.graph_ports)
+                        dport = self.graph_ports[prev_node.id][topo[cntr]]
+                        self.install_flow_dmac(prev_node,sport,dport,dmac)
+                        sport = self.graph_ports[topo[cntr]][prev_node.id]
+                        prev_node = self.dps[topo[cntr]]
+                        cntr -= 1
+                    self.install_flow_dmac(prev_node,sport,self.mac_table[dmac][1],dmac)
+                    #self.controller_send(dst_dp,dst_port,msg.data)
                 self._drop_packet(msg)
                 return
             if(p.protocol_name != 'arp' and p.protocol_name != 'lldp'
