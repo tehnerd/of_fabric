@@ -806,6 +806,7 @@ class OFFabric(app_manager.RyuApp):
                         prev_node = self.dps[topo[cntr]]
                         cntr -= 1
                     self.install_flow_dmac(prev_node,sport,self.mac_table[dmac][1],dmac)
+                    self._drop_packet(msg)
                     #self.controller_send(dst_dp,dst_port,msg.data)
                 self._drop_packet(msg)
                 return
