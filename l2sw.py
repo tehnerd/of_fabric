@@ -694,8 +694,9 @@ class OFFabric(app_manager.RyuApp):
 
     def install_flow_dip(self,dp,sport,dport,dip,actions = None):
         sip = of_utils.ip2int('192.168.0.1')
-        actions = [dp.ofproto_parser.OFPActionOutput(dport),
-                   dp.ofproto_parser.OFPActionSetNwSrc(sip)]
+        ddip = of_utils.ip2int('192.168.0.2')
+#        actions = [dp.ofproto_parser.OFPActionSetNwSrc(sip),
+        actions = [ dp.ofproto_parser.OFPActionOutput(dport)]
         ofproto = dp.ofproto
         match = dp.ofproto_parser.OFPMatch(in_port=sport,dl_type=0x0800, nw_dst = dip)
         mod = dp.ofproto_parser.OFPFlowMod(
