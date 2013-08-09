@@ -23,8 +23,10 @@ from ryu.ofproto import ofproto_v1_0
 from ryu.ofproto import nx_match
 from ryu.ofproto import ofproto_v1_2
 from ryu.ofproto import ofproto_v1_3
+from ryu.ofproto import ofproto_v1_3_parser
 import redis
-
+import cPickle as pickle
+import of_utils
 rdb = redis.StrictRedis(db=1)
 
 LOG = logging.getLogger(__name__)
@@ -424,8 +426,22 @@ class OFFabric(app_manager.RyuApp):
         self.ports = PortDataState()  # Port class -> PortData class
         self.links = LinkState()      # Link class -> timestamp
         self.is_active = True
-        self.mac_table = dict()
-        self.arp_table = dict()
+        try:
+            self.mac_table = pickle.loads(rdb.get('mac_table_pickled'))
+            LOG.info('init mac_table from redis')
+        except:
+            self.mac_table = None
+        if not self.mac_table:
+            self.mac_table = dict()
+            LOG.error('cant find mac_table id redis')
+        try:
+            self.arp_table = pickle.loads(rdb.get('arp_table_pickled'))
+            LOG.info('init arp_table from redis')
+        except:
+            self.arp_table = None
+        if not self.arp_table:
+            self.arp_table = dict()
+            LOG.error('cant find arp_table in redis')
         self.graph_map = dict()
         self.graph_ports = dict()
         
@@ -546,6 +562,22 @@ class OFFabric(app_manager.RyuApp):
                     dp.send_flow_mod(
                         rule=rule, cookie=0, command=ofproto.OFPFC_ADD,
                         idle_timeout=0, hard_timeout=0, actions=actions)
+#                if ofproto.OFP_VERSION == ofproto_v1_3.OFP_VERSION:
+#                    match = ofproto_v1_3_parser.OFPMatch(dl_type=ETH_TYPE_LLDP, dl_dst= lldp.LLDP_MAC_NEAREST_BRIDGE)
+#                    actions = [ofproto_v1_3_parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, self.LLDP_PACKET_LEN)]
+#                    mod = ofproto_v1_3_parser.OFPFlowMod(
+#                       datapath=dp, match=match, cookie=0,
+#                       command=ofproto.OFPFC_ADD, idle_timeout=0, hard_timeout=0, actions=actions)
+#                   dp.send_msg(mod)
+                    #rule = nx_match.ClsRule()
+                    #rule.set_dl_dst(lldp.LLDP_MAC_NEAREST_BRIDGE)
+                    #rule.set_dl_type(ETH_TYPE_LLDP)
+                    #actions = [ofproto_parser.OFPActionOutput(
+                    #    ofproto.OFPP_CONTROLLER, self.LLDP_PACKET_LEN)]
+                    #dp.send_flow_mod(
+                    #    rule=rule, cookie=0, command=ofproto.OFPFC_ADD,
+                    #    idle_timeout=0, hard_timeout=0, actions=actions)
+
                 else:
                     LOG.error('cannot install flow. unsupported version. %x',
                               dp.ofproto.OFP_VERSION)
@@ -652,18 +684,29 @@ class OFFabric(app_manager.RyuApp):
     def install_flow_dmac(self,dp,sport,dport,dmac,actions = None):
         actions = [dp.ofproto_parser.OFPActionOutput(dport)]
         ofproto = dp.ofproto
-        wildcards = ofproto_v1_0.OFPFW_ALL
-        wildcards &= ~ofproto_v1_0.OFPFW_IN_PORT
-        wildcards &= ~ofproto_v1_0.OFPFW_DL_DST
-        match = dp.ofproto_parser.OFPMatch(
-            wildcards=wildcards, in_port=sport, dl_dst= dmac)
-
+        match = dp.ofproto_parser.OFPMatch(in_port=sport, dl_dst= dmac)
         mod = dp.ofproto_parser.OFPFlowMod(
             datapath=dp, match=match, cookie=0,
             command=ofproto.OFPFC_ADD, idle_timeout=100, hard_timeout=200,
             priority=ofproto.OFP_DEFAULT_PRIORITY,
             flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
         dp.send_msg(mod)
+
+    def install_flow_dip(self,dp,sport,dport,dip,actions = None):
+        sip = of_utils.ip2int('192.168.0.1')
+        actions = [dp.ofproto_parser.OFPActionOutput(dport),
+                   dp.ofproto_parser.OFPActionSetNwSrc(sip)]
+        ofproto = dp.ofproto
+        match = dp.ofproto_parser.OFPMatch(in_port=sport,dl_type=0x0800, nw_dst = dip)
+        mod = dp.ofproto_parser.OFPFlowMod(
+            datapath=dp, match=match, cookie=0,
+            command=ofproto.OFPFC_MODIFY, idle_timeout=100, hard_timeout=200,
+            priority=ofproto.OFP_DEFAULT_PRIORITY,
+            flags=ofproto.OFPFF_SEND_FLOW_REM, actions=actions)
+        dp.send_msg(mod)
+
+
+
 
     def create_arp_response(self,srcip,srcmac,dstip):
         arp_pkt = packet.Packet()
@@ -751,7 +794,8 @@ class OFFabric(app_manager.RyuApp):
                 if self.explicit_drop:
                     self._drop_packet(msg)
             if p.protocol_name == 'arp':
-                dst, src, _eth_type = struct.unpack_from('!6s6sH', buffer(msg.data), 0)
+                #dst, src, _eth_type = struct.unpack_from('!6s6sH', buffer(msg.data), 0)
+                dst, src, _eth_type = of_utils.unpack_ethernet(msg.data)
                 src_ip_addr = p.src_ip
                 dst_ip_addr = p.dst_ip
                 src_mac_addr = src
@@ -763,10 +807,12 @@ class OFFabric(app_manager.RyuApp):
                     self.arp_table[src_ip_addr] = (host_dpid,host_port,
                                                    src_mac_addr)
                     rdb.set('arp_table',json.dumps(self.arp_table))
+                    rdb.set('arp_table_pickled',pickle.dumps(self.arp_table))
                 if(not src_mac_addr in self.mac_table or
                    self.mac_table[src_mac_addr] != (host_dpid,host_port)):
                     self.mac_table[src_mac_addr] = (host_dpid,host_port)
                     rdb.set('mac_table',json.dumps(self.mac_table))
+                    rdb.set('mac_table_pickled',pickle.dumps(self.mac_table))
                 if(dst_ip_addr in self.arp_table):
                     print('response')
                     arp_pkt = self.create_arp_response(src_ip_addr,
@@ -780,14 +826,16 @@ class OFFabric(app_manager.RyuApp):
             #testing, everything thru the contoller
             if p.protocol_name == 'ipv4':
                 if p.dst in self.arp_table:
+                    dip = of_utils.unpack_ipv4(msg.data, of_utils.IPV4_DIP)
+                    proto = p.proto
                     dmac = self.arp_table[p.dst][2]
                     sport = msg.in_port
                     if self.arp_table[p.dst][0] == dp.id:
                         print('same sw')
                         dport = self.arp_table[p.dst][1]
                         self.install_flow_dmac(dp,sport,dport,dmac)
-                        self._drop_packet(msg)
-                        #self.controller_send(dp,dport,msg.data)
+                        #self._drop_packet(msg)
+                        self.controller_send(dp,dport,msg.data)
                         return
                     dst_dpid = self.arp_table[p.dst][0]
                     dst_dp = self.dps[dst_dpid]
@@ -796,18 +844,18 @@ class OFFabric(app_manager.RyuApp):
                     print(topo)
                     cntr = len(topo) 
                     prev_node = dp
-                    while cntr >= 1:
-                        print(topo[cntr])
-                        print(prev_node.id)
-                        print(self.graph_ports)
+                    while cntr >= 1: 
                         dport = self.graph_ports[prev_node.id][topo[cntr]]
-                        self.install_flow_dmac(prev_node,sport,dport,dmac)
+#                        self.install_flow_dmac(prev_node,sport,dport,dmac)
+                        self.install_flow_dip(prev_node,sport,dport,dip)
                         sport = self.graph_ports[topo[cntr]][prev_node.id]
                         prev_node = self.dps[topo[cntr]]
                         cntr -= 1
-                    self.install_flow_dmac(prev_node,sport,self.mac_table[dmac][1],dmac)
-                    self._drop_packet(msg)
-                    #self.controller_send(dst_dp,dst_port,msg.data)
+                    #self.install_flow_dmac(prev_node,sport,self.mac_table[dmac][1],dmac)
+                    self.install_flow_dip(prev_node,sport,self.arp_table[p.dst][1],dip)
+                    print(p)
+                    #self._drop_packet(msg)
+                    self.controller_send(dst_dp,dst_port,msg.data)
                 self._drop_packet(msg)
                 return
             if(p.protocol_name != 'arp' and p.protocol_name != 'lldp'
