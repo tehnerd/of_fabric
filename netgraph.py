@@ -131,14 +131,8 @@ class NetGraph(object):
                     path_len = distance_dict[closest_node] + int(graph_dict[closest_node][neighbor])
                     if path_len <= distance_dict[neighbor]:
                         distance_dict[neighbor] = path_len
-                        if previous_node[neighbor] == '21313123131':
-                            previous_node[neighbor+'-ecmp'+str(ecmp_cntr)] = previous_node[neighbor]
-                            previous_node[neighbor] = closest_node
-                            previous_node2[neighbor].append(closest_node)
-                            ecmp_cntr += 1
-                        else:
-                            previous_node[neighbor] = closest_node
-                            previous_node2[neighbor].append(closest_node)
+                        previous_node[neighbor] = closest_node
+                        previous_node2[neighbor].append(closest_node)
         path_cntr = 1
         srcdst_path = dict()
         srcdst_path2 = dict()
