@@ -841,8 +841,9 @@ class OFFabric(app_manager.RyuApp):
                     dst_dpid = self.arp_table[p.dst][0]
                     dst_dp = self.dps[dst_dpid]
                     dst_port = self.arp_table[p.dst][1]
-                    met, topo = NetGraph.SrcDst_SPF_ECMP(self.graph_map,dp.id,dst_dpid)
+                    met, topo, topo_ecmp = NetGraph.SrcDst_SPF_ECMP(self.graph_map,dp.id,dst_dpid)
                     print(topo)
+                    print(topo_ecmp)
                     cntr = len(topo) 
                     prev_node = dp
                     while cntr >= 1: 
