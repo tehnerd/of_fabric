@@ -415,6 +415,7 @@ class OFFabric(app_manager.RyuApp):
     LLDP_SEND_GUARD = .05
     LLDP_SEND_PERIOD_PER_PORT = .9
     TIMEOUT_CHECK_PERIOD = 5.
+    MSG_CHECK_PERIOD = 5.
     LINK_TIMEOUT = TIMEOUT_CHECK_PERIOD * 2
     LINK_LLDP_DROP = 5
 
@@ -454,12 +455,17 @@ class OFFabric(app_manager.RyuApp):
             self.link_event = hub.Event()
             self.threads.append(hub.spawn(self.lldp_loop))
             self.threads.append(hub.spawn(self.link_loop))
+        self.listen_for_msg = True
+        if self.listen_for_msg:
+            self.msg_event = hub.Event()
+            self.threads.append(hub.spawn(self.msg_loop))
 
     def close(self):
         self.is_active = False
         if self.link_discovery:
             self.lldp_event.set()
             self.link_event.set()
+            self.msg_event.set()
             hub.joinall(self.threads)
 
     def _register(self, dp):
@@ -562,13 +568,13 @@ class OFFabric(app_manager.RyuApp):
                     dp.send_flow_mod(
                         rule=rule, cookie=0, command=ofproto.OFPFC_ADD,
                         idle_timeout=0, hard_timeout=0, actions=actions)
-#                if ofproto.OFP_VERSION == ofproto_v1_3.OFP_VERSION:
+#                elif ofproto.OFP_VERSION == ofproto_v1_3.OFP_VERSION:
 #                    match = ofproto_v1_3_parser.OFPMatch(dl_type=ETH_TYPE_LLDP, dl_dst= lldp.LLDP_MAC_NEAREST_BRIDGE)
 #                    actions = [ofproto_v1_3_parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, self.LLDP_PACKET_LEN)]
 #                    mod = ofproto_v1_3_parser.OFPFlowMod(
 #                       datapath=dp, match=match, cookie=0,
 #                       command=ofproto.OFPFC_ADD, idle_timeout=0, hard_timeout=0, actions=actions)
-#                   dp.send_msg(mod)
+#                    dp.send_msg(mod)
                     #rule = nx_match.ClsRule()
                     #rule.set_dl_dst(lldp.LLDP_MAC_NEAREST_BRIDGE)
                     #rule.set_dl_type(ETH_TYPE_LLDP)
@@ -693,8 +699,6 @@ class OFFabric(app_manager.RyuApp):
         dp.send_msg(mod)
 
     def install_flow_dip(self,dp,sport,dport,dip,actions = None):
-        sip = of_utils.ip2int('192.168.0.1')
-        ddip = of_utils.ip2int('192.168.0.2')
 #        actions = [dp.ofproto_parser.OFPActionSetNwSrc(sip),
         actions = [ dp.ofproto_parser.OFPActionOutput(dport)]
         ofproto = dp.ofproto
@@ -730,6 +734,7 @@ class OFFabric(app_manager.RyuApp):
                 self.graph_ports[link.dpid] = dict()
             self.graph_map[link.dpid][self.links._map[link].dpid] = 1
             self.graph_ports[link.dpid][self.links._map[link].dpid] = link.port_no
+        rdb.set('fabric_map',json.dumps(self.graph_map))
         return True
 
 
@@ -956,6 +961,16 @@ class OFFabric(app_manager.RyuApp):
                         self.lldp_event.set()
 
             self.link_event.wait(timeout=self.TIMEOUT_CHECK_PERIOD)
+
+    def msg_loop(self):
+        while self.is_active:
+            self.msg_event.clear()
+            cntrl_msg = rdb.get('cntrl_msg')
+            rdb.set('cntrl_msg', '')
+            if(cntrl_msg):
+                print(cntrl_msg)
+            self.msg_event.wait(timeout=self.MSG_CHECK_PERIOD)
+
 
     @set_ev_cls(event.EventSwitchRequest)
     def switch_request_handler(self, req):
